@@ -1,0 +1,243 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Transaction Schema for Analytical Model",
+  "description": "Schema definition for financial transactions from credit originator, risk bureau, and accounting consolidator",
+  "type": "object",
+  "required": [
+    "transaction_id",
+    "transaction_date",
+    "transaction_type",
+    "amount",
+    "currency",
+    "originator_id",
+    "originator_name",
+    "risk_score",
+    "accounting_consolidator_id",
+    "consolidation_date",
+    "created_at",
+    "updated_at",
+    "processing_status"
+  ],
+  "properties": {
+    "transaction_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{8,32}$",
+      "description": "Unique identifier for the transaction, used as primary key for idempotency",
+      "examples": ["TXN20240315000001", "CRD987654321ABC"],
+      "maxLength": 32
+    },
+    "transaction_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when the transaction was originally created at the originator",
+      "minimum": "2020-01-01",
+      "maximum": "2030-12-31"
+    },
+    "transaction_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Full timestamp with timezone for precise transaction timing"
+    },
+    "transaction_type": {
+      "type": "string",
+      "enum": [
+        "CREDIT_DISBURSEMENT",
+        "CREDIT_PAYMENT",
+        "REFUND",
+        "FEE_CHARGE",
+        "INTEREST_ACCRUAL",
+        "PENALTY_CHARGE",
+        "ADJUSTMENT",
+        "WRITE_OFF"
+      ],
+      "description": "Type of financial transaction being recorded"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": -999999999.99,
+      "maximum": 999999999.99,
+      "multipleOf": 0.01,
+      "description": "Transaction amount in specified currency"
+    },
+    "currency": {
+      "type": "string",
+      "enum": ["USD", "EUR", "GBP", "MXN", "CAD", "AUD"],
+      "description": "ISO 4217 currency code",
+      "default": "USD"
+    },
+    "originator_id": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}[0-9]{4,10}$",
+      "description": "Unique identifier for the credit originator entity",
+      "minLength": 7,
+      "maxLength": 14
+    },
+    "originator_name": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 200,
+      "description": "Legal name of the credit originator"
+    },
+    "originator_category": {
+      "type": "string",
+      "enum": [
+        "BANK",
+        "CREDIT_UNION",
+        "MICROFINANCE",
+        "FINTECH",
+        "CONSUMER_FINANCE"
+      ],
+      "description": "Category classification of the originator"
+    },
+    "risk_bureau_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{6,20}$",
+      "description": "Identifier from the risk bureau service"
+    },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "description": "Risk score from bureau, used for quality validation"
+    },
+    "risk_category": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "VERY_HIGH", "DEFAULT"],
+      "description": "Categorized risk level derived from score"
+    },
+    "dti_ratio": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 10.0,
+      "multipleOf": 0.001,
+      "description": "Debt-to-income ratio from risk assessment"
+    },
+    "accounting_consolidator_id": {
+      "type": "string",
+      "pattern": "^ACC[0-9]{6,12}$",
+      "description": "Identifier for accounting consolidation record"
+    },
+    "consolidation_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when transaction was consolidated in accounting"
+    },
+    "accounting_code": {
+      "type": "string",
+      "pattern": "^[0-9]{4,8}$",
+      "description": "General ledger account code"
+    },
+    "cost_center": {
+      "type": "string",
+      "pattern": "^CC[0-9]{3,6}$",
+      "description": "Cost center for accounting allocation"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when record was first created in the system"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of last modification"
+    },
+    "processing_status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "VALIDATED",
+        "APPROVED",
+        "REJECTED",
+        "QUARANTINED",
+        "PROCESSED"
+      ],
+      "description": "Current processing state in the pipeline"
+    },
+    "validation_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule", "field", "message"],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "description": "Identifier of the validation rule that failed"
+          },
+          "field": {
+            "type": "string",
+            "description": "Field name that triggered the validation error"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error message"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["ERROR", "WARNING", "INFO"]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "description": "List of validation errors if transaction was quarantined"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata for audit and lineage",
+      "properties": {
+        "source_system": {
+          "type": "string",
+          "enum": ["CREDIT_ORIGINATOR", "RISK_BUREAU", "ACCOUNTING_CONSOLIDATOR", "ETL_PIPELINE"]
+        },
+        "batch_id": {
+          "type": "string",
+          "pattern": "^BATCH[0-9]{8,16}$"
+        },
+        "pipeline_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["dev", "staging", "prod"]
+        },
+        "partition_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date used for partitioning in analytical model"
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "processing_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "transaction_date_range": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string", "format": "date"},
+        "end": {"type": "string", "format": "date"}
+      }
+    },
+    "amount_bounds": {
+      "type": "object",
+      "properties": {
+        "min_amount": {"type": "number"},
+        "max_amount": {"type": "number"},
+        "currency": {"type": "string"}
+      }
+    }
+  }
+}

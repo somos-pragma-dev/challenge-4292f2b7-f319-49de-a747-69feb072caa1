@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quarantined Transaction Record Schema",
+  "description": "Esquema para registros de transacciones en cuarentena por fallar reglas de calidad. Incluye datos originales y metadatos de error para análisis posterior.",
+  "type": "object",
+  "properties": {
+    "transaction_id": {
+      "type": "string",
+      "description": "Identificador único de la transacción original del sistema origen"
+    },
+    "source_system": {
+      "type": "string",
+      "enum": ["credit_originator", "risk_bureau", "accounting_consolidator"],
+      "description": "Sistema origen que generó la transacción"
+    },
+    "transaction_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha de la transacción en formato ISO 8601"
+    },
+    "transaction_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp completo de cuando se procesó la transacción"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Monto de la transacción"
+    },
+    "currency": {
+      "type": "string",
+      "description": "Código de moneda ISO 4217"
+    },
+    "account_id": {
+      "type": "string",
+      "description": "Identificador de cuenta involucrada"
+    },
+    "account_type": {
+      "type": ["string", "null"],
+      "description": "Tipo de cuenta si aplica"
+    },
+    "customer_id": {
+      "type": ["string", "null"],
+      "description": "Identificador del cliente"
+    },
+    "transaction_type": {
+      "type": ["string", "null"],
+      "description": "Tipo de transacción"
+    },
+    "status": {
+      "type": ["string", "null"],
+      "description": "Estado de la transacción"
+    },
+    "quarantine_metadata": {
+      "type": "object",
+      "description": "Metadatos específicos de la cuarentena",
+      "properties": {
+        "quarantine_timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp de cuando la transacción fue puesta en cuarentena"
+        },
+        "processing_batch_id": {
+          "type": "string",
+          "description": "Identificador del batch de procesamiento que generó la cuarentena"
+        },
+        "rule_violations": {
+          "type": "array",
+          "description": "Lista de reglas de calidad que la transacción violó",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_id": {
+                "type": "string",
+                "description": "Identificador único de la regla de calidad"
+              },
+              "rule_name": {
+                "type": "string",
+                "description": "Nombre descriptivo de la regla"
+              },
+              "rule_category": {
+                "type": "string",
+                "enum": ["completeness", "validity", "consistency", "uniqueness", "timeliness"],
+                "description": "Categoría de la regla de calidad"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["error", "warning"],
+                "description": "Severidad de la violación"
+              },
+              "error_message": {
+                "type": "string",
+                "description": "Mensaje descriptivo del error"
+              },
+              "expected_value": {
+                "type": ["string", "number", "null"],
+                "description": "Valor esperado según la regla"
+              },
+              "actual_value": {
+                "type": ["string", "number", "null"],
+                "description": "Valor actual que violó la regla"
+              }
+            },
+            "required": ["rule_id", "rule_name", "rule_category", "severity", "error_message"]
+          }
+        },
+        "rejection_reason": {
+          "type": "string",
+          "description": "Descripción consolidada de por qué la transacción fue rechazada"
+        },
+        "retry_count": {
+          "type": "integer",
+          "description": "Número de intentos de reprocesamiento",
+          "minimum": 0
+        },
+        "last_retry_timestamp": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp del último intento de reprocesamiento"
+        },
+        "manual_review_required": {
+          "type": "boolean",
+          "description": "Indica si la transacción requiere revisión manual"
+        },
+        "original_raw_data": {
+          "type": "object",
+          "description": "Copia del registro original tal cual llegó del origen",
+          "additionalProperties": true
+        }
+      },
+      "required": ["quarantine_timestamp", "processing_batch_id", "rule_violations"]
+    },
+    "lineage": {
+      "type": "object",
+      "description": "Información de linaje para trazabilidad",
+      "properties": {
+        "extraction_timestamp": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp de extracción del sistema origen"
+        },
+        "transformation_pipeline_version": {
+          "type": "string",
+          "description": "Versión del pipeline de transformación que procesó la transacción"
+        },
+        "environment": {
+          "type": "string",
+          "description": "Ambiente de procesamiento (dev, staging, prod)"
+        }
+      }
+    }
+  },
+  "required": ["transaction_id", "source_system", "quarantine_metadata"],
+  "additionalProperties": false
+}

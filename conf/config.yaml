@@ -1,0 +1,361 @@
+estage: development
+
+spark:
+  app_name: transaction-consolidation-pipeline
+  master: local[*]
+  memory: 4g
+  cores: 2
+  max_result_size: 2g
+  driver_memory: 2g
+  executor_memory: 2g
+  default_timeout: 300
+  max_retries: 3
+
+sources:
+  credit_originator:
+    type: delta
+    path: s3://datalake/raw/credit_originator/
+    format: delta
+    options:
+      mergeSchema: true
+      overwriteSchema: false
+    partition_by: date
+
+  risk_bureau:
+    type: delta
+    path: s3://datalake/raw/risk_bureau/
+    format: delta
+    options:
+      mergeSchema: true
+      overwriteSchema: false
+    partition_by: date
+
+  accounting_consolidator:
+    type: delta
+    path: s3://datalake/raw/accounting_consolidator/
+    format: delta
+    options:
+      mergeSchema: true
+      overwriteSchema: false
+    partition_by: date
+
+destination:
+  analytical_model:
+    type: delta
+    path: s3://datalake/analytics/transactions/
+    format: delta
+    partition_by:
+      - transaction_date
+      - source_system
+    options:
+      mergeSchema: true
+      overwriteSchema: false
+      dataSkippingNumIndexedCols: 3
+
+quarantine:
+  path: s3://datalake/quarantine/transactions/
+  format: parquet
+  partition_by: error_date
+  retention_days: 90
+
+idempotency:
+  checkpoint_path: s3://datalake/checkpoints/idempotency/
+  enabled: true
+  cleanup_days: 30
+
+quality_rules:
+  enabled: true
+  rules:
+    - name: transaction_id_not_null
+      description: El identificador de transacción no puede ser nulo
+      severity: critical
+      action: quarantine
+
+    - name: amount_positive
+      description: El monto de la transacción debe ser mayor a cero
+      severity: critical
+      action: quarantine
+
+    - name: transaction_date_valid
+      description: La fecha de transacción no puede ser futura ni anterior a 2020
+      severity: warning
+      action: quarantine
+
+    - name: currency_code_valid
+      description: El código de moneda debe ser válido (ISO 4217)
+      severity: warning
+      action: quarantine
+
+    - name: account_id_format
+      description: El ID de cuenta debe seguir el formato esperado
+      severity: info
+      action: quarantine
+
+    - name: duplicate_detection
+      description: No puede haber IDs de transacción duplicados en la misma fuente
+      severity: critical
+      action: quarantine
+
+  valid_currencies:
+    - USD
+    - EUR
+    - MXN
+    - GBP
+    - JPY
+    - CAD
+    - BRL
+    - COP
+
+  date_range:
+    min_year: 2020
+    max_future_days: 0
+
+performance:
+  shuffle_partitions: 200
+  broadcast_threshold_mb: 10
+  adaptive_enabled: true
+  coalesce_partitions: 50
+  checkpoint_interval: 100
+
+  spark_conf:
+    spark.sql.adaptive.enabled: true
+    spark.sql.adaptive.coalescePartitions.enabled: true
+    spark.sql.adaptive.coalescePartitions.minPartitionNum: 1
+    spark.sql.adaptive.skewJoin.enabled: true
+    spark.sql.adaptive.skewJoin.skewedPartitionFactor: 5
+    spark.sql.adaptive.skewJoin.skewedPartitionThresholdInBytes: 256MB
+    spark.sql.files.maxPartitionBytes: 128MB
+    spark.sql.shuffle.partitions: 200
+
+airflow:
+  dag_id: consolidate_transactions
+  schedule_interval: 0 4 * * *
+  start_date: "2024-01-01"
+  retry_delay_minutes: 5
+  max_retries: 3
+  execution_timeout_minutes: 120
+  sla_minutes: 90
+  depends_on_past: false
+  wait_for_downstream: true
+
+  notifications:
+    on_success:
+      - type: email
+        recipients:
+          - data-eng@empresa.com
+    on_failure:
+      - type: email
+        recipients:
+          - data-eng@empresa.com
+          - ops@empresa.com
+      - type: slack
+        webhook: https://hooks.slack.com/services/xxx
+
+monitoring:
+  metrics_enabled: true
+  metrics_path: /tmp/metrics
+  alerting:
+    latency_threshold_seconds: 300
+    error_rate_threshold_percent: 5
+    record_count_variance_percent: 20
+
+  thresholds:
+    min_records_per_run: 1000
+    max_records_per_run: 10000000
+    expected_processing_rate_per_minute: 10000
+
+security:
+  iam_role: arn:aws:iam::123456789012:role/data-lake-writer
+  kms_key_id: alias/data-lake-key
+  encryption: AES256
+  access_control:
+    read_roles:
+      - arn:aws:iam::123456789012:role/analyst
+      - arn:aws:iam::123456789012:role/data-scientist
+    write_roles:
+      - arn:aws:iam::123456789012:role/data-engineer
+
+environments:
+  production:
+    sources:
+      credit_originator:
+        path: s3://prod-datalake/raw/credit_originator/
+      risk_bureau:
+        path: s3://prod-datalake/raw/risk_bureau/
+      accounting_consolidator:
+        path: s3://prod-datalake/raw/accounting_consolidator/
+    destination:
+      analytical_model:
+        path: s3://prod-datalake/analytics/transactions/
+    spark:
+      master: spark://prod-master:7077
+      executor_memory: 4g
+      cores: 4
+
+  staging:
+    sources:
+      credit_originator:
+        path: s3://staging-datalake/raw/credit_originator/
+      risk_bureau:
+        path: s3://staging-datalake/raw/risk_bureau/
+      accounting_consolidator:
+        path: s3://staging-datalake/raw/accounting_consolidator/
+    destination:
+      analytical_model:
+        path: s3://staging-datalake/analytics/transactions/
+    spark:
+      master: local[*]
+      executor_memory: 2g
+      cores: 2
+
+
+import pytest
+import pandas as pd
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+from datetime import datetime
+
+
+@pytest.fixture(scope="module")
+def spark_session():
+    """Crea una sesión de Spark para los tests."""
+    spark = SparkSession.builder \
+        .appName("test_transaction_transformer") \
+        .master("local[2]") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .getOrCreate()
+    yield spark
+    spark.stop()
+
+
+@pytest.fixture
+def sample_transactions_df(spark_session):
+    """DataFrame de transacciones de prueba."""
+    schema = StructType([
+        StructField("transaction_id", StringType(), False),
+        StructField("originator", StringType(), False),
+        StructField("account_id", StringType(), False),
+        StructField("amount", DoubleType(), False),
+        StructField("currency", StringType(), True),
+        StructField("transaction_date", TimestampType(), False),
+        StructField("transaction_type", StringType(), True),
+        StructField("status", StringType(), True),
+    ])
+    
+    data = [
+        ("TX001", "CREDIT_ORIGINATOR", "ACC123", 1000.00, "USD", datetime(2024, 1, 15, 10, 30), "DISBURSEMENT", "COMPLETED"),
+        ("TX002", "RISK_BUREAU", "ACC456", 2500.50, "USD", datetime(2024, 1, 15, 11, 0), "PAYMENT", "COMPLETED"),
+        ("TX003", "ACCOUNTING_CONSOLIDATOR", "ACC789", 500.00, "EUR", datetime(2024, 1, 15, 12, 15), "TRANSFER", "PENDING"),
+        ("TX004", "CREDIT_ORIGINATOR", "ACC123", 1500.00, "USD", datetime(2024, 1, 15, 13, 0), "DISBURSEMENT", "COMPLETED"),
+        ("TX005", "RISK_BUREAU", "ACC999", 0.00, "USD", datetime(2024, 1, 15, 14, 30), "PAYMENT", "FAILED"),
+    ]
+    
+    return spark_session.createDataFrame(data, schema)
+
+
+@pytest.fixture
+def expected_schema():
+    """Esquema esperado del DataFrame transformado."""
+    return StructType([
+        StructField("transaction_id", StringType(), False),
+        StructField("consolidated_date", StringType(), False),
+        StructField("originator_code", StringType(), False),
+        StructField("account_id", StringType(), False),
+        StructField("amount_usd", DoubleType(), False),
+        StructField("amount_eur", DoubleType(), True),
+        StructField("transaction_category", StringType(), True),
+        StructField("processing_status", StringType(), True),
+        StructField("is_valid", StringType(), True),
+    ])
+
+
+def test_transformer_applies_business_rules(spark_session, sample_transactions_df):
+    """Verifica que el transformer aplica las reglas de negocio correctamente."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(sample_transactions_df)
+    
+    assert result_df.count() == 5
+    
+    result_rows = result_df.collect()
+    
+    first_row = next(r for r in result_rows if r["transaction_id"] == "TX001")
+    assert first_row["consolidated_date"] == "2024-01-15"
+    assert first_row["originator_code"] == "CRED"
+    assert first_row["amount_usd"] == 1000.00
+    assert first_row["transaction_category"] == "DISBURSEMENT"
+
+
+def test_transformer_handles_currency_conversion(spark_session, sample_transactions_df):
+    """Verifica la conversión de monedas para transacciones en EUR."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(sample_transactions_df)
+    
+    eur_row = next(r for r in result_df.collect() if r["transaction_id"] == "TX003")
+    assert eur_row["amount_eur"] is not None
+    assert eur_row["amount_usd"] > 0
+
+
+def test_transformer_maps_originator_codes(spark_session, sample_transactions_df):
+    """Verifica el mapeo correcto de códigos de originador."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(sample_transactions_df)
+    
+    rows = result_df.collect()
+    originators = {r["originator_code"] for r in rows}
+    
+    assert "CRED" in originators
+    assert "RISK" in originators
+    assert "ACCT" in originators
+
+
+def test_transformer_filters_failed_transactions(spark_session, sample_transactions_df):
+    """Verifica que las transacciones fallidas se marcan como inválidas."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(sample_transactions_df)
+    
+    failed_tx = next(r for r in result_df.collect() if r["transaction_id"] == "TX005")
+    assert failed_tx["is_valid"] == "false"
+
+
+def test_transformer_preserves_valid_transaction_ids(spark_session, sample_transactions_df):
+    """Verifica que los IDs de transacción válidos se preservan."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(sample_transactions_df)
+    
+    result_ids = {r["transaction_id"] for r in result_df.collect()}
+    expected_ids = {"TX001", "TX002", "TX003", "TX004", "TX005"}
+    
+    assert result_ids == expected_ids
+
+
+def test_transformer_handles_empty_dataframe(spark_session):
+    """Verifica que el transformer maneja DataFrames vacíos."""
+    from src.transform.transaction_transformer import TransactionTransformer
+    
+    schema = StructType([
+        StructField("transaction_id", StringType(), False),
+        StructField("originator", StringType(), False),
+        StructField("account_id", StringType(), False),
+        StructField("amount", DoubleType(), False),
+        StructField("currency", StringType(), True),
+        StructField("transaction_date", TimestampType(), False),
+        StructField("transaction_type", StringType(), True),
+        StructField("status", StringType(), True),
+    ])
+    
+    empty_df = spark_session.createDataFrame([], schema)
+    transformer = TransactionTransformer(spark_session)
+    result_df = transformer.transform(empty_df)
+    
+    assert result_df.count() == 0
